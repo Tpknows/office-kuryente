@@ -1055,6 +1055,7 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
       <div class="filter-bar wk-quick">
         <button class="filter-btn active" id="mo-q-current" onclick="moQuick('current', this)">Current Cycle</button>
         <button class="filter-btn" id="mo-q-prev" onclick="moQuick('previous', this)">Previous Cycle</button>
+        <button class="btn wk-export-btn" onclick="generateManusPrompt()">🎯 Manus PPT Prompt</button>
         <button class="btn btn-primary wk-export-btn" onclick="exportMonthlyReport()">⬇ Export Monthly Report</button>
       </div>
     </div>
@@ -1443,6 +1444,26 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
 
 <!-- One-page monthly PDF report (print only) -->
 <div class="wk-print-report" id="mo-print-report"></div>
+
+<!-- Manus PPT Prompt Modal -->
+<div id="manus-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999;align-items:center;justify-content:center;padding:1.5rem">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;max-width:640px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.25)">
+    <div style="padding:1.1rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:1rem">
+      <div>
+        <div style="font-size:0.92rem;font-weight:600;color:var(--text)">Manus PPT Prompt</div>
+        <div style="font-size:0.74rem;color:var(--muted);margin-top:3px;line-height:1.5">Copy this prompt and paste it into Manus to generate a minimalist, professional monthly report deck built from this cycle's actual figures.</div>
+      </div>
+      <button class="btn" onclick="closeManusModal()" aria-label="Close" style="flex-shrink:0">✕</button>
+    </div>
+    <div style="padding:1.1rem 1.4rem;overflow-y:auto;flex:1">
+      <textarea id="manus-prompt-text" readonly style="width:100%;min-height:360px;resize:vertical;font-family:var(--mono);font-size:0.72rem;line-height:1.55;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:0.9rem;"></textarea>
+    </div>
+    <div style="padding:0.9rem 1.4rem;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn" onclick="closeManusModal()">Close</button>
+      <button class="btn btn-primary" id="manus-copy-btn" onclick="copyManusPrompt()">Copy Prompt</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ── Dark mode ──
@@ -3064,6 +3085,103 @@ function exportMonthlyReport() {
   const cleanup = () => { document.body.classList.remove('mo-print-mode'); window.removeEventListener('afterprint', cleanup); };
   window.addEventListener('afterprint', cleanup);
   window.print();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MANUS PPT PROMPT GENERATOR
+//  Builds a ready-to-paste text prompt (for Manus) describing a
+//  minimalist, professional monthly PowerPoint report, populated
+//  with this cycle's real figures vs. the previous cycle.
+// ══════════════════════════════════════════════════════════════
+function buildManusPromptText(r) {
+  const pctStr = p => p == null ? 'n/a' : `${p > 0 ? '+' : ''}${p.toFixed(1)}%`;
+  const varSign = r.variance > 0 ? '+' : '';
+  const savingsLine = r.savings >= 0
+    ? `${fmtPeso(r.savings)} saved vs target`
+    : `${fmtPeso(Math.abs(r.savings))} over target`;
+
+  let cmpBlock = 'No previous billing cycle available for comparison.';
+  if (r.prev) {
+    const prevCPE = r.prev.staff > 0 ? r.prev.cost / r.prev.staff : null;
+    const prevKPE = r.prev.staff > 0 ? r.prev.kwh  / r.prev.staff : null;
+    cmpBlock = [
+      `Consumption: ${fmt(r.kwh,0)} kWh vs ${fmt(r.prev.kwh,0)} kWh previous cycle (${pctStr(wkPctChange(r.kwh, r.prev.kwh))})`,
+      `Estimated Cost: ${fmtPeso(r.cost)} vs ${fmtPeso(r.prev.cost)} previous cycle (${pctStr(wkPctChange(r.cost, r.prev.cost))})`,
+      `Staff Attendance: ${fmt(r.staff,0)} vs ${fmt(r.prev.staff,0)} previous cycle (${pctStr(wkPctChange(r.staff, r.prev.staff))})`,
+      `Cost Per Employee: ${r.costPerEmp != null ? fmtPeso(r.costPerEmp) : '—'} vs ${prevCPE != null ? fmtPeso(prevCPE) : '—'} (${pctStr(wkPctChange(r.costPerEmp, prevCPE))})`,
+      `kWh Per Employee: ${r.kwhPerEmp != null ? fmt(r.kwhPerEmp,2) : '—'} vs ${prevKPE != null ? fmt(prevKPE,2) : '—'} (${pctStr(wkPctChange(r.kwhPerEmp, prevKPE))})`,
+    ].map(l => '- ' + l).join('\n');
+  }
+
+  let officialBlock = null;
+  if (r.official) {
+    const accuracyPct = r.official.actualKwh > 0
+      ? 100 - (Math.abs(r.kwh - r.official.actualKwh) / r.official.actualKwh) * 100
+      : null;
+    officialBlock = [
+      `Logged Usage (this app): ${fmt(r.kwh,0)} kWh`,
+      `Official Electric Co. Usage: ${fmt(r.official.actualKwh,0)} kWh`,
+      `Official Bill Amount: ${fmtPeso(r.official.actualAmount)}`,
+      `Logging Accuracy: ${accuracyPct != null ? accuracyPct.toFixed(1) + '%' : '—'}`,
+    ].map(l => '- ' + l).join('\n');
+  }
+
+  const dailyBlock = r.segments.map(s =>
+    `- ${s.dayAbbrev} ${s.dateLabel}: ${fmt(s.kwh,0)} kWh, ${s.staff > 0 ? fmt(s.staff,0) : '—'} staff, ${fmtPeso(s.cost)}`
+  ).join('\n');
+
+  const highlightsBlock = moHighlights(r).map(h => '- ' + h).join('\n');
+
+  const slides = [];
+  slides.push(`1. Title Slide — "EasyPC Energy Monitor · Monthly Report", billing cycle "${r.title}", status: ${r.status.label}.`);
+  slides.push(`2. Executive Summary — Consumption ${fmt(r.kwh,0)} kWh vs target ${fmt(r.target,0)} kWh (variance ${varSign}${fmt(r.variance,0)} kWh); Estimated Bill ${fmtPeso(r.cost)}; ${savingsLine}; overall status "${r.status.label}".`);
+  slides.push(`3. Monthly Scorecard — Average Daily Usage ${fmt(r.avgDaily,1)} kWh/day; Present Staff (total across cycle) ${r.staff > 0 ? fmt(r.staff,0) : '—'}; Cost Per Employee ${r.costPerEmp != null ? fmtPeso(r.costPerEmp) : '—'}; kWh Per Employee ${r.kwhPerEmp != null ? fmt(r.kwhPerEmp,2) : '—'}.`);
+  slides.push(`4. Daily Consumption Trend — present as a simple bar/line chart (day on the x-axis, kWh as bars, cost as a line), using this data:\n${dailyBlock}`);
+  slides.push(`5. Compared to Last Billing Cycle:\n${cmpBlock}`);
+  if (officialBlock) slides.push(`6. Logged vs. Official Electric Bill:\n${officialBlock}`);
+  slides.push(`${officialBlock ? 7 : 6}. Key Highlights & Insights:\n${highlightsBlock}`);
+  slides.push(`${officialBlock ? 8 : 7}. Closing / Next Steps — one short recommendation slide; tone should match whether the cycle finished within or over target.`);
+
+  return `Create a minimalist, professional PowerPoint presentation (.pptx) reporting on EasyPC's Mandaluyong office energy performance for billing cycle "${r.title}".
+
+DESIGN DIRECTION:
+- Minimalist, corporate style: generous white space, one accent color, clean sans-serif typography (Inter/Helvetica-style).
+- Consistent header (report title, top-left) and footer (page number, bottom-right) on every slide.
+- Use simple bar/line charts instead of dense tables wherever a data series is listed below.
+- No stock photos, no clip art — icons and typography only.
+- Color logic for status callouts: green = good/within target, amber = caution, red = over target.
+
+SLIDE-BY-SLIDE CONTENT (use these exact figures — do not invent, round differently, or omit any):
+
+${slides.join('\n\n')}
+
+CONTEXT: Rate used is ₱${RATE}/kWh. Monthly target is ${fmt(TARGET_KWH,0)} kWh. Keep the deck to roughly ${slides.length} slides, one topic per slide, presentation-ready for a leadership review.`;
+}
+
+function generateManusPrompt() {
+  const cycles = moBuildCycles();
+  const r = moResolveReport(cycles);
+  if (!r) { alert('No monthly data available yet to generate a prompt.'); return; }
+  document.getElementById('manus-prompt-text').value = buildManusPromptText(r);
+  document.getElementById('manus-modal').style.display = 'flex';
+}
+
+function closeManusModal() {
+  document.getElementById('manus-modal').style.display = 'none';
+}
+
+async function copyManusPrompt() {
+  const ta = document.getElementById('manus-prompt-text');
+  ta.select();
+  const btn = document.getElementById('manus-copy-btn');
+  const flash = (label) => { const orig = btn.textContent; btn.textContent = label; setTimeout(() => { btn.textContent = orig; }, 1800); };
+  try {
+    await navigator.clipboard.writeText(ta.value);
+    flash('✓ Copied!');
+  } catch (e) {
+    try { document.execCommand('copy'); flash('✓ Copied!'); }
+    catch (e2) { flash('Copy failed — select & Ctrl+C'); }
+  }
 }
 
 // Fire-and-forget: log today's visit to the "VISIT LOG" sheet tab.
