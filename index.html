@@ -970,6 +970,7 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
         <button class="filter-btn active" id="wk-q-current" onclick="wkQuick('current', this)">Current Week</button>
         <button class="filter-btn" id="wk-q-prev" onclick="wkQuick('previous', this)">Previous Week</button>
         <button class="filter-btn" id="wk-q-last4" onclick="wkQuick('last4', this)">Last 4 Weeks</button>
+        <button class="btn wk-export-btn" onclick="generateWeeklyManusPrompt()">🎯 Manus PPT Prompt</button>
         <button class="btn btn-primary wk-export-btn" onclick="exportWeeklyReport()">⬇ Export Weekly Report</button>
       </div>
     </div>
@@ -1535,6 +1536,14 @@ setInterval(loadFromSheet, 5 * 60 * 1000); // auto-refresh meter reading data ev
 
 // ── Constants ──
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby-dHB2QmR02GvzWTlhusLsXa8hXFbeS4uZrd0QUNbP5YGtSiY8eP8oUhvfq2mbSdghtQ/exec';
+// How much history to request per load. Covers the current + previous
+// billing cycle, the "Last 4 Weeks" view, and gives slack for closed cycles
+// that haven't been added to MO_OFFICIAL_RESULTS/MO_CYCLE_OVERRIDES yet.
+// Increase this if older un-overridden cycles start disappearing from the
+// "Select Billing Cycle" dropdown. The Apps Script endpoint only honors this
+// once it's been updated to read the `since` param — until then it's a
+// harmless no-op query string and the full sheet is returned as before.
+const FETCH_WINDOW_DAYS = 400;
 let DATA = [];
 let lastSuccessfulUpdate = null;
 const RATE         = 16.51;
@@ -2072,7 +2081,10 @@ function handleActivityUpload(event) {
 async function loadFromSheet() {
   setStatus(true, 'Fetching data…');
   try {
-    const res = await fetch(APPS_SCRIPT_URL);
+    const since = new Date(); since.setDate(since.getDate() - FETCH_WINDOW_DAYS); since.setHours(0,0,0,0);
+    const sinceStr = `${since.getFullYear()}-${String(since.getMonth()+1).padStart(2,'0')}-${String(since.getDate()).padStart(2,'0')}`;
+    const url = `${APPS_SCRIPT_URL}?since=${sinceStr}`;
+    const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
     const rows = parseCSV(text);
@@ -3093,21 +3105,29 @@ function exportMonthlyReport() {
 //  minimalist, professional monthly PowerPoint report, populated
 //  with this cycle's real figures vs. the previous cycle.
 // ══════════════════════════════════════════════════════════════
-function buildManusPromptText(r) {
+function buildManusPromptText(r, cfg) {
+  cfg = cfg || {};
+  const reportLabel   = cfg.reportLabel   || 'Monthly Report';
+  const periodNoun    = cfg.periodNoun    || 'billing cycle';
+  const compareLabel  = cfg.compareLabel  || 'Compared to Last Billing Cycle';
+  const trendLabel    = cfg.trendLabel    || 'Daily Consumption Trend';
+  const axisNoun      = cfg.axisNoun      || 'day';
+  const highlightsFn  = cfg.highlightsFn  || moHighlights;
+
   const pctStr = p => p == null ? 'n/a' : `${p > 0 ? '+' : ''}${p.toFixed(1)}%`;
   const varSign = r.variance > 0 ? '+' : '';
   const savingsLine = r.savings >= 0
     ? `${fmtPeso(r.savings)} saved vs target`
     : `${fmtPeso(Math.abs(r.savings))} over target`;
 
-  let cmpBlock = 'No previous billing cycle available for comparison.';
+  let cmpBlock = `No previous ${periodNoun} available for comparison.`;
   if (r.prev) {
     const prevCPE = r.prev.staff > 0 ? r.prev.cost / r.prev.staff : null;
     const prevKPE = r.prev.staff > 0 ? r.prev.kwh  / r.prev.staff : null;
     cmpBlock = [
-      `Consumption: ${fmt(r.kwh,0)} kWh vs ${fmt(r.prev.kwh,0)} kWh previous cycle (${pctStr(wkPctChange(r.kwh, r.prev.kwh))})`,
-      `Estimated Cost: ${fmtPeso(r.cost)} vs ${fmtPeso(r.prev.cost)} previous cycle (${pctStr(wkPctChange(r.cost, r.prev.cost))})`,
-      `Staff Attendance: ${fmt(r.staff,0)} vs ${fmt(r.prev.staff,0)} previous cycle (${pctStr(wkPctChange(r.staff, r.prev.staff))})`,
+      `Consumption: ${fmt(r.kwh,0)} kWh vs ${fmt(r.prev.kwh,0)} kWh previous ${periodNoun} (${pctStr(wkPctChange(r.kwh, r.prev.kwh))})`,
+      `Estimated Cost: ${fmtPeso(r.cost)} vs ${fmtPeso(r.prev.cost)} previous ${periodNoun} (${pctStr(wkPctChange(r.cost, r.prev.cost))})`,
+      `Staff Attendance: ${fmt(r.staff,0)} vs ${fmt(r.prev.staff,0)} previous ${periodNoun} (${pctStr(wkPctChange(r.staff, r.prev.staff))})`,
       `Cost Per Employee: ${r.costPerEmp != null ? fmtPeso(r.costPerEmp) : '—'} vs ${prevCPE != null ? fmtPeso(prevCPE) : '—'} (${pctStr(wkPctChange(r.costPerEmp, prevCPE))})`,
       `kWh Per Employee: ${r.kwhPerEmp != null ? fmt(r.kwhPerEmp,2) : '—'} vs ${prevKPE != null ? fmt(prevKPE,2) : '—'} (${pctStr(wkPctChange(r.kwhPerEmp, prevKPE))})`,
     ].map(l => '- ' + l).join('\n');
@@ -3126,30 +3146,50 @@ function buildManusPromptText(r) {
     ].map(l => '- ' + l).join('\n');
   }
 
-  const dailyBlock = r.segments.map(s =>
-    `- ${s.dayAbbrev} ${s.dateLabel}: ${fmt(s.kwh,0)} kWh, ${s.staff > 0 ? fmt(s.staff,0) : '—'} staff, ${fmtPeso(s.cost)}`
-  ).join('\n');
+  // Condensed summary instead of a full row-per-segment dump — keeps the
+  // prompt short regardless of how many days/weeks are in the report, while
+  // still giving Manus the shape of the trend (first/last/high/low + average)
+  // rather than every data point. `name` + `dateLabel` exist on both daily
+  // segments (monthly/weekly views) and weekly-aggregate segments.
+  let dailyBlock = `No ${axisNoun} readings recorded yet for this ${periodNoun}.`;
+  const withData = r.segments.filter(s => s.hasData && s.kwh > 0);
+  const avgPerSeg = withData.length > 0 ? withData.reduce((s,x) => s + x.kwh, 0) / withData.length : 0;
+  if (withData.length > 0) {
+    const first = withData[0];
+    const last = withData[withData.length - 1];
+    const hi = withData.reduce((a,b) => b.kwh > a.kwh ? b : a);
+    const lo = withData.reduce((a,b) => b.kwh < a.kwh ? b : a);
+    const label = s => s.dateLabel ? `${s.name} (${s.dateLabel})` : s.name;
+    dailyBlock = [
+      `${axisNoun === 'week' ? 'Weeks' : 'Days'} with data: ${withData.length}, average ${fmt(avgPerSeg,1)} kWh/${axisNoun}`,
+      `First ${axisNoun}: ${label(first)} — ${fmt(first.kwh,0)} kWh`,
+      `Last ${axisNoun}: ${label(last)} — ${fmt(last.kwh,0)} kWh`,
+      `Highest ${axisNoun}: ${label(hi)} — ${fmt(hi.kwh,0)} kWh`,
+      `Lowest ${axisNoun}: ${label(lo)} — ${fmt(lo.kwh,0)} kWh`,
+    ].map(l => '- ' + l).join('\n');
+  }
 
-  const highlightsBlock = moHighlights(r).map(h => '- ' + h).join('\n');
+  const highlightsBlock = highlightsFn(r).map(h => '- ' + h).join('\n');
 
+  const axisAdj = axisNoun === 'week' ? 'Weekly' : 'Daily';
   const slides = [];
-  slides.push(`1. Title Slide — "EasyPC Energy Monitor · Monthly Report", billing cycle "${r.title}", status: ${r.status.label}.`);
-  slides.push(`2. Executive Summary — Consumption ${fmt(r.kwh,0)} kWh vs target ${fmt(r.target,0)} kWh (variance ${varSign}${fmt(r.variance,0)} kWh); Estimated Bill ${fmtPeso(r.cost)}; ${savingsLine}; overall status "${r.status.label}".`);
-  slides.push(`3. Monthly Scorecard — Average Daily Usage ${fmt(r.avgDaily,1)} kWh/day; Present Staff (total across cycle) ${r.staff > 0 ? fmt(r.staff,0) : '—'}; Cost Per Employee ${r.costPerEmp != null ? fmtPeso(r.costPerEmp) : '—'}; kWh Per Employee ${r.kwhPerEmp != null ? fmt(r.kwhPerEmp,2) : '—'}.`);
-  slides.push(`4. Daily Consumption Trend — present as a simple bar/line chart (day on the x-axis, kWh as bars, cost as a line), using this data:\n${dailyBlock}`);
-  slides.push(`5. Compared to Last Billing Cycle:\n${cmpBlock}`);
-  if (officialBlock) slides.push(`6. Logged vs. Official Electric Bill:\n${officialBlock}`);
-  slides.push(`${officialBlock ? 7 : 6}. Key Highlights & Insights:\n${highlightsBlock}`);
-  slides.push(`${officialBlock ? 8 : 7}. Closing / Next Steps — one short recommendation slide; tone should match whether the cycle finished within or over target.`);
+  slides.push(`1. Title Slide — "EasyPC Energy Monitor · ${reportLabel}", ${periodNoun} "${r.title}", status: ${r.status.label}.`);
+  slides.push(`2. Executive Summary — [Visual: horizontal bar or gauge chart comparing Consumption vs Target] Consumption ${fmt(r.kwh,0)} kWh vs target ${fmt(r.target,0)} kWh (variance ${varSign}${fmt(r.variance,0)} kWh); Estimated Bill ${fmtPeso(r.cost)}; ${savingsLine}; overall status "${r.status.label}".`);
+  slides.push(`3. ${reportLabel === 'Weekly Report' ? 'Weekly' : 'Monthly'} Scorecard — [Visual: row of KPI cards, each with a small icon and big number, not a table] Average ${axisAdj} Usage ${fmt(avgPerSeg,1)} kWh/${axisNoun}; Present Staff (total across ${periodNoun}) ${r.staff > 0 ? fmt(r.staff,0) : '—'}; Cost Per Employee ${r.costPerEmp != null ? fmtPeso(r.costPerEmp) : '—'}; kWh Per Employee ${r.kwhPerEmp != null ? fmt(r.kwhPerEmp,2) : '—'}.`);
+  slides.push(`4. ${trendLabel} — [Visual: combo chart — kWh as vertical bars per ${axisNoun}, cost as an overlaid line, both against a shared or dual axis] covering the full ${periodNoun}. Summary of the trend shape:\n${dailyBlock}`);
+  slides.push(`5. ${compareLabel} — [Visual: grouped/paired bar chart, one bar pair per metric below, this ${periodNoun} vs previous ${periodNoun}]:\n${cmpBlock}`);
+  if (officialBlock) slides.push(`6. Logged vs. Official Electric Bill — [Visual: two-bar comparison chart, Logged vs Official, plus a large accuracy % callout]:\n${officialBlock}`);
+  slides.push(`${officialBlock ? 7 : 6}. Key Highlights & Insights — [Visual: icon + short-text callout cards, one per bullet, not a plain bulleted list]:\n${highlightsBlock}`);
+  slides.push(`${officialBlock ? 8 : 7}. Closing / Next Steps — one short recommendation slide; tone should match whether the ${periodNoun} finished within or over target.`);
 
-  return `Create a minimalist, professional PowerPoint presentation (.pptx) reporting on EasyPC's Mandaluyong office energy performance for billing cycle "${r.title}".
+  return `Create a minimalist, professional PowerPoint presentation (.pptx) reporting on EasyPC's Mandaluyong office energy performance for ${periodNoun} "${r.title}".
 
 DESIGN DIRECTION:
 - Minimalist, corporate style: generous white space, one accent color, clean sans-serif typography (Inter/Helvetica-style).
 - Consistent header (report title, top-left) and footer (page number, bottom-right) on every slide.
-- Use simple bar/line charts instead of dense tables wherever a data series is listed below.
-- No stock photos, no clip art — icons and typography only.
-- Color logic for status callouts: green = good/within target, amber = caution, red = over target.
+- Every slide that carries numbers must include a chart, gauge, KPI card, or icon-based visual — never a plain bulleted list or a dense table. The bracketed [Visual: ...] note on each slide below specifies which chart type to use.
+- No stock photos, no clip art — icons, charts, and typography only.
+- Color logic for status callouts and charts: green = good/within target, amber = caution, red = over target.
 
 SLIDE-BY-SLIDE CONTENT (use these exact figures — do not invent, round differently, or omit any):
 
@@ -3162,7 +3202,30 @@ function generateManusPrompt() {
   const cycles = moBuildCycles();
   const r = moResolveReport(cycles);
   if (!r) { alert('No monthly data available yet to generate a prompt.'); return; }
-  document.getElementById('manus-prompt-text').value = buildManusPromptText(r);
+  document.getElementById('manus-prompt-text').value = buildManusPromptText(r, {
+    reportLabel: 'Monthly Report',
+    periodNoun: 'billing cycle',
+    compareLabel: 'Compared to Last Billing Cycle',
+    trendLabel: 'Daily Consumption Trend',
+    axisNoun: 'day',
+    highlightsFn: moHighlights,
+  });
+  document.getElementById('manus-modal').style.display = 'flex';
+}
+
+function generateWeeklyManusPrompt() {
+  const weeks = wkBuildWeeks();
+  const r = wkResolveReport(weeks);
+  if (!r) { alert('No weekly data available yet to generate a prompt.'); return; }
+  const isAgg = r.segmentType === 'week';
+  document.getElementById('manus-prompt-text').value = buildManusPromptText(r, {
+    reportLabel: 'Weekly Report',
+    periodNoun: isAgg ? `${r.weeks}-week period` : 'week',
+    compareLabel: isAgg ? 'Compared to Previous 4-Week Period' : 'Compared to Last Week',
+    trendLabel: isAgg ? 'Weekly Consumption Trend' : 'Daily Consumption Trend',
+    axisNoun: isAgg ? 'week' : 'day',
+    highlightsFn: wkHighlights,
+  });
   document.getElementById('manus-modal').style.display = 'flex';
 }
 
