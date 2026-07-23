@@ -1533,6 +1533,7 @@ function updateEnergyImpact(temp) {
 loadWeather();
 setInterval(loadWeather, 30 * 60 * 1000); // auto-refresh weather every 30 mins; location fixed to Mandaluyong above
 setInterval(loadFromSheet, 5 * 60 * 1000); // auto-refresh meter reading data every 5 mins
+setInterval(loadOfficialResults, 5 * 60 * 1000); // auto-refresh official bill results every 5 mins
 
 // ── Constants ──
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby-dHB2QmR02GvzWTlhusLsXa8hXFbeS4uZrd0QUNbP5YGtSiY8eP8oUhvfq2mbSdghtQ/exec';
@@ -1574,16 +1575,22 @@ const MO_CYCLE_OVERRIDES = {
 // Used purely as a reference/comparison row in the Monthly Report — does NOT
 // affect any of the app's own computed/estimated figures elsewhere.
 //
-// HOW TO ADD A NEW CYCLE: once a new official bill comes in, add one line
-// below, keyed by that cycle's start date in 'YYYY-MM-DD' format (always the
-// 21st of the month). Example for the cycle after this one:
-//   '2026-06-21': { actualKwh: 0000, actualAmount: 00000.00 },
-// That's it — the Monthly Report tab will automatically show the "Logged
-// vs. Official Electric Bill" card for that cycle once you select it.
+// This is now loaded LIVE from the "OFFICIAL RESULT" sheet — see
+// loadOfficialResults() below. To add a new cycle, just add a row to that
+// sheet (BILLING PERIOD | TOTAL KW USAGE | AMOUNT, e.g.
+// "JUNE 21 TO JULY 20" | 2210 | 38500.00) and it appears on the Monthly
+// Report automatically once fetched — no code edits needed.
+//
+// This object below is kept only as an offline/fallback fixture (used if
+// the live fetch fails, e.g. no internet on first paint) and does NOT need
+// to be updated manually going forward.
 const MO_OFFICIAL_RESULTS = {
   '2026-04-21': { actualKwh: 2543, actualAmount: 42436.00 },
   '2026-05-21': { actualKwh: 2071, actualAmount: 37047.00 },
 };
+// Populated at runtime by loadOfficialResults(); takes priority over the
+// fallback fixture above whenever a key exists in both.
+let MO_OFFICIAL_LIVE = {};
 
 const STATUS_SCALE = [
   { max: 49,       key: 'safe',    color: '#22C55E', bg: 'rgba(34,197,94,0.10)',   label: 'Safe'       },
@@ -2539,6 +2546,58 @@ function exportWeeklyReport() {
 let moSelMode = 'cycle';   // currently only 'cycle' (kept for symmetry with weekly module)
 let moSelKey  = null;      // cycle-start ISO key when a specific cycle is picked
 
+const MO_MONTH_NAMES_ = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER'];
+
+// Turns an "OFFICIAL RESULT" sheet row's billing-period text (e.g.
+// "APRIL 21 TO MAY 20") into the moKey format ('YYYY-MM-DD') the rest of
+// the app uses. Cycles always run 21st→20th, so only the start month name
+// is needed — the year is inferred as the most recent one that isn't in
+// the future, since official bills are always for a closed/past cycle.
+function officialPeriodToKey_(periodText, refDate = new Date()) {
+  const m = String(periodText || '').toUpperCase().match(/([A-Z]+)\s+21\s+TO/);
+  if (!m) return null;
+  const monthIdx = MO_MONTH_NAMES_.indexOf(m[1]);
+  if (monthIdx === -1) return null;
+  let year = refDate.getFullYear();
+  if (new Date(year, monthIdx, 21) > refDate) year -= 1;
+  return moKey(new Date(year, monthIdx, 21));
+}
+
+// Parses the CSV returned by ?sheet=official into { 'YYYY-MM-DD': {actualKwh, actualAmount} }
+function parseOfficialResultsCsv_(csvText) {
+  const out = {};
+  if (!csvText || !csvText.trim()) return out;
+  parseCSV(csvText).forEach(cols => {
+    const period = cols[0] || '';
+    const kwhRaw = cols[1] || '';
+    const amtRaw = cols[2] || '';
+    if (!period || !kwhRaw || !amtRaw) return;
+    const key = officialPeriodToKey_(period);
+    if (!key) return;
+    const kwh = parseFloat(kwhRaw.replace(/[",]/g, ''));
+    const amt = parseFloat(amtRaw.replace(/[",]/g, ''));
+    if (!isFinite(kwh) || !isFinite(amt)) return;
+    out[key] = { actualKwh: kwh, actualAmount: amt };
+  });
+  return out;
+}
+
+// Fetches the "OFFICIAL RESULT" sheet and populates MO_OFFICIAL_LIVE.
+// Safe to call anytime — on failure it just leaves MO_OFFICIAL_LIVE as-is
+// and the app falls back to the MO_OFFICIAL_RESULTS fixture.
+async function loadOfficialResults() {
+  try {
+    const res = await fetch(`${APPS_SCRIPT_URL}?sheet=official`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    MO_OFFICIAL_LIVE = parseOfficialResultsCsv_(text);
+  } catch (err) {
+    console.warn('Could not load official results from Sheet:', err);
+  } finally {
+    if (document.getElementById('tab-monthly')?.classList.contains('active')) renderMonthlyReport();
+  }
+}
+
 function moKey(d) {
   // Build the key from LOCAL date components, not toISOString() — ISO
   // formatting converts to UTC first, which in any UTC+ timezone (e.g. PH,
@@ -2632,7 +2691,7 @@ function moBuildCycleReport(c, prev) {
     kwh: d.kwh, staff: d.staff, cost: d.cost, hasData: true,
   }));
 
-  const official = MO_OFFICIAL_RESULTS[moKey(c.start)] || null;
+  const official = MO_OFFICIAL_LIVE[moKey(c.start)] || MO_OFFICIAL_RESULTS[moKey(c.start)] || null;
 
   const r = {
     title: moRangeLong(c.start, c.end),
@@ -3260,6 +3319,7 @@ function logVisit() {
 }
 
 loadFromSheet();
+loadOfficialResults();
 logVisit();
 </script>
 </body>
