@@ -2466,7 +2466,7 @@ function renderWeeklyReport() {
     const costChange = wkCmpCell(wkPctChange(r.cost, r.prev.cost), true);
     const costOver = r.cost > r.targetCost;
     costChange.color = costOver ? STATUS_BAR.over : STATUS_BAR.safe;
-    const staffCell = wkCmpCell(wkPctChange(r.staff, r.prev.staff), false);
+    const staffCell = wkCmpCell(wkPctChange(r.staff, r.prev.staff), true);
     const rows = [
       { label:'Consumption',      cell: consChange, sub: consOver ? 'over target' : 'within target' },
       { label:'Estimated Cost',   cell: costChange,  sub: costOver ? 'over target' : 'within target' },
@@ -3032,7 +3032,7 @@ function renderMonthlyReport() {
     const costChange = wkCmpCell(wkPctChange(r.cost, r.prev.cost), true);
     const costOver = r.cost > r.targetCost;
     costChange.color = costOver ? STATUS_BAR.over : STATUS_BAR.safe;
-    const staffCell = wkCmpCell(wkPctChange(r.staff, r.prev.staff), false);
+    const staffCell = wkCmpCell(wkPctChange(r.staff, r.prev.staff), true);
     const cpeCell = wkCmpCell(wkPctChange(r.costPerEmp, prevCPE), true);
     const kpeCell = wkCmpCell(wkPctChange(r.kwhPerEmp, prevKPE), true);
     const rows = [
