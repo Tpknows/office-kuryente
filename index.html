@@ -3062,6 +3062,10 @@ function renderMonthlyReport() {
       ? 100 - (Math.abs(r.kwh - r.official.actualKwh) / r.official.actualKwh) * 100
       : null;
     const accColor = accuracyPct >= 95 ? STATUS_BAR.safe : accuracyPct >= 85 ? STATUS_BAR.monitor : STATUS_BAR.over;
+    const billVariance = r.cost - r.official.actualAmount;
+    const billVarColor = Math.abs(billVariance) <= r.official.actualAmount * 0.02 ? STATUS_BAR.safe
+      : billVariance > 0 ? STATUS_BAR.over : STATUS_BAR.monitor;
+    const billVarSign = billVariance > 0 ? '+' : billVariance < 0 ? '-' : '';
     offEl.innerHTML = `
       <div class="wk-compare-row">
         <div class="wk-compare-label">Logged Usage (this app)</div>
@@ -3072,14 +3076,22 @@ function renderMonthlyReport() {
         <div class="wk-compare-val">${fmt(r.official.actualKwh,0)} kWh</div>
       </div>
       <div class="wk-compare-row">
+        <div class="wk-compare-label">Logging Accuracy</div>
+        <div class="wk-compare-val" style="color:${accColor}">${accuracyPct != null ? fmt(accuracyPct,1) + '%' : '—'}</div>
+      </div>
+      <div class="wk-compare-row">
+        <div class="wk-compare-label">Logged Bill (this app)</div>
+        <div class="wk-compare-val">${fmtPeso(r.cost)}</div>
+      </div>
+      <div class="wk-compare-row">
         <div class="wk-compare-label">Official Bill Amount</div>
         <div class="wk-compare-val">${fmtPeso(r.official.actualAmount)}</div>
       </div>
       <div class="wk-compare-row">
-        <div class="wk-compare-label">Logging Accuracy</div>
-        <div class="wk-compare-val" style="color:${accColor}">${accuracyPct != null ? fmt(accuracyPct,1) + '%' : '—'}</div>
+        <div class="wk-compare-label">Bill Variance</div>
+        <div class="wk-compare-val" style="color:${billVarColor}">${billVarSign}${fmtPeso(Math.abs(billVariance))}</div>
       </div>
-      <div class="wk-kpi-sub" style="margin-top:0.4rem">Accuracy = how closely our logged meter readings matched the actual electric company bill for this cycle.</div>`;
+      <div class="wk-kpi-sub" style="margin-top:0.4rem">Accuracy = how closely our logged meter readings matched the actual electric company bill for this cycle. Bill Variance = app-computed bill minus the official bill amount.</div>`;
   } else if (offCard) {
     offCard.style.display = 'none';
   }
@@ -3198,11 +3210,14 @@ function buildManusPromptText(r, cfg) {
     const accuracyPct = r.official.actualKwh > 0
       ? 100 - (Math.abs(r.kwh - r.official.actualKwh) / r.official.actualKwh) * 100
       : null;
+    const billVariance = r.cost - r.official.actualAmount;
     officialBlock = [
       `Logged Usage (this app): ${fmt(r.kwh,0)} kWh`,
       `Official Electric Co. Usage: ${fmt(r.official.actualKwh,0)} kWh`,
-      `Official Bill Amount: ${fmtPeso(r.official.actualAmount)}`,
       `Logging Accuracy: ${accuracyPct != null ? accuracyPct.toFixed(1) + '%' : '—'}`,
+      `Logged Bill (this app): ${fmtPeso(r.cost)}`,
+      `Official Bill Amount: ${fmtPeso(r.official.actualAmount)}`,
+      `Bill Variance: ${billVariance > 0 ? '+' : billVariance < 0 ? '-' : ''}${fmtPeso(Math.abs(billVariance))}`,
     ].map(l => '- ' + l).join('\n');
   }
 
