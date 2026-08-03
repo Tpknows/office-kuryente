@@ -1853,11 +1853,12 @@ function renderProgramTracker(rows) {
     let statusColor = (isFuture || !hasData) ? 'var(--muted)' : status.color;
     const cls = isActive ? 'month-cell active-month' : isPast && hasData ? 'month-cell done-month' : 'month-cell future-month';
 
-    // Small muted line showing the app's own logged reading, only when we
-    // actually have an official figure taking the primary spot instead.
-    const appSubLabel = (usingOfficial && appKwh > 0)
-      ? `<div style="font-size:0.6rem;color:var(--muted);opacity:0.65;margin-top:3px;">app log: ${appKwh.toLocaleString()} kWh</div>`
-      : '';
+    // Small muted line under the number:
+    // - if official is showing: the app's own logged reading, for reference
+    // - if app-logged is showing instead (no official yet): a note saying so
+    const appSubLabel = usingOfficial
+      ? (appKwh > 0 ? `<div style="font-size:0.6rem;color:var(--muted);opacity:0.65;margin-top:3px;">app log: ${appKwh.toLocaleString()} kWh</div>` : '')
+      : (hasData ? `<div style="font-size:0.6rem;color:var(--muted);opacity:0.65;margin-top:3px;">not yet official</div>` : '');
 
     return `
       <div class="${cls}">
