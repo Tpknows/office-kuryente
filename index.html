@@ -792,6 +792,7 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
     <button class="tab-btn" role="tab" aria-selected="false" onclick="switchTab('monthly', this)">Monthly Report</button>
     <button class="tab-btn" role="tab" aria-selected="false" onclick="switchTab('kidlat', this)">Team Kidlat</button>
     <button class="tab-btn" role="tab" aria-selected="false" onclick="switchTab('policy', this)">Policy</button>
+    <button class="tab-btn" role="tab" aria-selected="false" id="admin-tab-btn" style="display:none" onclick="switchTab('admin', this)">Admin</button>
   </div>
 
   <!-- TAB: DASHBOARD -->
@@ -1452,6 +1453,33 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
 
   </div><!-- end tab-policy -->
 
+  <!-- TAB: ADMIN (only visible to ADMIN_EMAILS) -->
+  <div class="tab-panel" id="tab-admin">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div>
+        <div style="font-size:0.95rem;font-weight:600;color:var(--text)">Access Log</div>
+        <div style="font-size:0.74rem;color:var(--muted);margin-top:2px;">Who has signed in, and when. Most recent first.</div>
+      </div>
+      <button class="btn" onclick="loadVisitLog()">Refresh</button>
+    </div>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;">
+      <table style="width:100%;border-collapse:collapse;font-size:0.8rem;">
+        <thead>
+          <tr style="background:var(--panel-2);text-align:left;">
+            <th style="padding:8px 12px;">Date</th>
+            <th style="padding:8px 12px;">First visit today</th>
+            <th style="padding:8px 12px;">Visits today</th>
+            <th style="padding:8px 12px;">Name</th>
+            <th style="padding:8px 12px;">Email</th>
+          </tr>
+        </thead>
+        <tbody id="admin-visit-log-body">
+          <tr><td colspan="5" style="padding:12px;color:var(--muted);">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div><!-- end tab-admin -->
+
 </div><!-- end wrap -->
 
 <!-- One-page weekly PDF report (print only) -->
@@ -1488,6 +1516,14 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
 // ══════════════════════════════════════════════════════════════
 const MSAL_CLIENT_ID = "63c06b0f-5ca1-4a92-8b1c-74ebbae67b26";
 const MSAL_TENANT_ID = "973ec11f-980d-4bd7-9443-fe528f0a752b";
+
+// Domain allowed to see the Admin tab (Access Log). Since sign-in is already
+// restricted to the EasyPC tenant (MSAL_TENANT_ID above), this just means
+// "anyone who can sign in at all" — there's no separate staff-vs-admin split.
+// NOTE: this is a UI convenience, not a hard security boundary — anyone
+// signed in could inspect the page's JS and call the same Apps Script
+// endpoint directly. Fine for an internal low-stakes tool.
+const ADMIN_EMAIL_DOMAIN = "easypc.com.ph";
 
 if (typeof msal === 'undefined') {
   document.getElementById('auth-status-text').textContent = 'Sign-in library failed to load';
@@ -1551,10 +1587,13 @@ function onSignedIn(account) {
   document.getElementById('app-content').style.display = '';
   const label = document.getElementById('auth-user-label');
   if (label) label.textContent = account.username;
+  if ((account.username || '').toLowerCase().endsWith('@' + ADMIN_EMAIL_DOMAIN)) {
+    document.getElementById('admin-tab-btn').style.display = '';
+  }
   // Only load dashboard data once identity is confirmed
   loadFromSheet();
   loadOfficialResults();
-  logVisit();
+  logVisit(account);
 }
 
 initAuth();
@@ -2107,6 +2146,7 @@ function switchTab(id, btn) {
   document.getElementById('refresh-btn').style.display = isDash ? '' : 'none';
   document.getElementById('print-btn').style.display = isDash ? '' : 'none';
   document.getElementById('fetch-status').style.display = isDash ? '' : 'none';
+  if (id === 'admin') loadVisitLog();
 }
 
 function printDashboard() {
@@ -3418,12 +3458,45 @@ async function copyManusPrompt() {
 // Uses text/plain as the content-type (not application/json) specifically
 // to avoid a CORS preflight OPTIONS request, which Apps Script Web Apps
 // don't handle — the body itself is still valid JSON that doPost() parses.
-function logVisit() {
+function logVisit(account) {
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'logVisit' }),
+    body: JSON.stringify({
+      action: 'logVisit',
+      email: account?.username || '',
+      name: account?.name || account?.username || '',
+    }),
   }).catch(() => { /* non-critical — silently ignore if it fails */ });
+}
+
+// Admin tab: fetch the VISIT LOG sheet as JSON and render it as a table.
+async function loadVisitLog() {
+  const body = document.getElementById('admin-visit-log-body');
+  body.innerHTML = '<tr><td colspan="5" style="padding:12px;color:var(--muted);">Loading…</td></tr>';
+  try {
+    const res = await fetch(`${APPS_SCRIPT_URL}?sheet=visitlog`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const rows = await res.json();
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="5" style="padding:12px;color:var(--muted);">No visits logged yet.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(r => `
+      <tr style="border-top:1px solid var(--border);">
+        <td style="padding:8px 12px;">${escapeHtml_(r.date)}</td>
+        <td style="padding:8px 12px;">${escapeHtml_(r.time)}</td>
+        <td style="padding:8px 12px;">${escapeHtml_(String(r.count))}</td>
+        <td style="padding:8px 12px;">${escapeHtml_(r.name)}</td>
+        <td style="padding:8px 12px;">${escapeHtml_(r.email)}</td>
+      </tr>`).join('');
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="5" style="padding:12px;color:#EF4444;">Could not load access log: ${escapeHtml_(err.message)}</td></tr>`;
+  }
+}
+
+function escapeHtml_(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
 // loadFromSheet(), loadOfficialResults(), and logVisit() now run inside
