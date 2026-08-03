@@ -6,6 +6,7 @@
 <title>EasyPC Energy Monitor</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://alcdn.msauth.net/browser/3.18.0/js/msal-browser.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -745,7 +746,18 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
 </style>
 </head>
 <body>
-<div class="wrap">
+
+<!-- AUTH GATE — blocks access until signed in with a Microsoft 365 account from the EasyPC tenant -->
+<div id="auth-gate" style="position:fixed;inset:0;background:#0F1115;color:#F3F4F6;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;z-index:9999;font-family:'Inter',sans-serif;">
+  <div style="width:40px;height:40px;border-radius:8px;background:#F3F4F6;display:flex;align-items:center;justify-content:center;">
+    <svg viewBox="0 0 16 16" width="20" height="20" fill="#0F1115"><path d="M9 1L2 9h6l-1 6 7-8H8l1-6z"/></svg>
+  </div>
+  <div style="font-size:0.9rem;font-weight:600;" id="auth-status-text">Checking sign-in…</div>
+  <button id="auth-signin-btn" onclick="msalSignIn()" style="display:none;padding:9px 22px;border-radius:6px;background:#F3F4F6;color:#0F1115;border:none;font-weight:500;cursor:pointer;font-size:0.82rem;">Sign in with Microsoft</button>
+  <div id="auth-error-text" style="font-size:0.75rem;color:#EF4444;max-width:320px;text-align:center;display:none;"></div>
+</div>
+
+<div class="wrap" id="app-content" style="display:none;">
 
   <!-- HEADER -->
   <header>
@@ -761,6 +773,8 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
       </div>
     </div>
     <div class="header-right">
+      <span id="auth-user-label" style="font-size:0.72rem;color:var(--muted);font-family:var(--mono);"></span>
+      <button class="btn" onclick="msalSignOut()" aria-label="Sign out">Sign out</button>
       <span id="fetch-status">Fetching…</span>
       <label class="dm-toggle" onclick="toggleDark()" role="switch" aria-checked="false" aria-label="Toggle dark mode" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDark();}">
         <div class="toggle-track" id="dm-track"><div class="toggle-knob"></div></div>
@@ -1467,6 +1481,76 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
 </div>
 
 <script>
+// ══════════════════════════════════════════════════════════════
+// AUTH GATE — Microsoft 365 sign-in, restricted to the EasyPC tenant.
+// Replace CLIENT_ID and TENANT_ID below with the values from your
+// Azure AD App Registration (see setup instructions provided separately).
+// ══════════════════════════════════════════════════════════════
+const MSAL_CLIENT_ID = "63c06b0f-5ca1-4a92-8b1c-74ebbae67b26";
+const MSAL_TENANT_ID = "973ec11f-980d-4bd7-9443-fe528f0a752b";
+
+const msalConfig = {
+  auth: {
+    clientId: MSAL_CLIENT_ID,
+    authority: `https://login.microsoftonline.com/${MSAL_TENANT_ID}`,
+    redirectUri: window.location.origin + window.location.pathname,
+  },
+  cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: false },
+};
+const msalInstance = new msal.PublicClientApplication(msalConfig);
+
+async function initAuth() {
+  await msalInstance.initialize();
+  try {
+    const response = await msalInstance.handleRedirectPromise();
+    if (response) { onSignedIn(response.account); return; }
+  } catch (e) {
+    showAuthError(e.errorMessage || e.message || String(e));
+    return;
+  }
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length > 0) {
+    onSignedIn(accounts[0]);
+  } else {
+    document.getElementById('auth-status-text').textContent = 'Please sign in with your EasyPC Microsoft account';
+    document.getElementById('auth-signin-btn').style.display = 'inline-block';
+  }
+}
+
+function msalSignIn() {
+  document.getElementById('auth-signin-btn').style.display = 'none';
+  document.getElementById('auth-error-text').style.display = 'none';
+  document.getElementById('auth-status-text').textContent = 'Redirecting to Microsoft sign-in…';
+  msalInstance.loginRedirect({ scopes: ["User.Read"] });
+}
+
+function msalSignOut() {
+  msalInstance.logoutRedirect();
+}
+
+function showAuthError(msg) {
+  document.getElementById('auth-status-text').textContent = 'Sign-in failed';
+  const err = document.getElementById('auth-error-text');
+  err.textContent = msg;
+  err.style.display = 'block';
+  const btn = document.getElementById('auth-signin-btn');
+  btn.style.display = 'inline-block';
+  btn.textContent = 'Try again';
+}
+
+function onSignedIn(account) {
+  document.getElementById('auth-gate').style.display = 'none';
+  document.getElementById('app-content').style.display = '';
+  const label = document.getElementById('auth-user-label');
+  if (label) label.textContent = account.username;
+  // Only load dashboard data once identity is confirmed
+  loadFromSheet();
+  loadOfficialResults();
+  logVisit();
+}
+
+initAuth();
+
 // ── Dark mode ──
 function toggleDark() {
   const isDark = document.documentElement.classList.toggle('dark');
@@ -3334,9 +3418,8 @@ function logVisit() {
   }).catch(() => { /* non-critical — silently ignore if it fails */ });
 }
 
-loadFromSheet();
-loadOfficialResults();
-logVisit();
+// loadFromSheet(), loadOfficialResults(), and logVisit() now run inside
+// onSignedIn() above, after Microsoft sign-in is confirmed.
 </script>
 </body>
 </html>
