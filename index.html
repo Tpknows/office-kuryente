@@ -1828,10 +1828,20 @@ function renderProgramTracker(rows) {
     const isActive = today >= pm.start && today <= pm.end;
     const isPast   = today > pm.end;
     const isFuture = today < pm.start;
-    const monthKwh = (isPast && pm.historicalKwh !== null)
-      ? pm.historicalKwh
-      : rows.filter(r => r.dateObj >= pm.start && r.dateObj <= pm.end)
-            .reduce((s, r) => s + r.kwh, 0);
+
+    // App-logged kWh (from KIDLAT meter readings) — kept as a small, muted
+    // secondary reference once an official figure is available.
+    const appKwh = rows.filter(r => r.dateObj >= pm.start && r.dateObj <= pm.end)
+                       .reduce((s, r) => s + r.kwh, 0);
+
+    // Official billed kWh (from the OFFICIAL RESULT sheet) — this is now the
+    // primary number for the card whenever it exists for this cycle.
+    const official = MO_OFFICIAL_LIVE[moKey(pm.start)] || MO_OFFICIAL_RESULTS[moKey(pm.start)] || null;
+    const usingOfficial = !!official;
+    const monthKwh = usingOfficial ? official.actualKwh
+      : (isPast && pm.historicalKwh !== null) ? pm.historicalKwh
+      : appKwh;
+
     const hasData = monthKwh > 0;
     const pct     = Math.round((monthKwh / TARGET_KWH) * 100);
     const status  = hasData ? getStatus(pct) : null;
@@ -1842,6 +1852,13 @@ function renderProgramTracker(rows) {
       : isPast ? status.label + ' ✓' : pct + '% · ' + status.label;
     let statusColor = (isFuture || !hasData) ? 'var(--muted)' : status.color;
     const cls = isActive ? 'month-cell active-month' : isPast && hasData ? 'month-cell done-month' : 'month-cell future-month';
+
+    // Small muted line showing the app's own logged reading, only when we
+    // actually have an official figure taking the primary spot instead.
+    const appSubLabel = (usingOfficial && appKwh > 0)
+      ? `<div style="font-size:0.6rem;color:var(--muted);opacity:0.65;margin-top:3px;">app log: ${appKwh.toLocaleString()} kWh</div>`
+      : '';
+
     return `
       <div class="${cls}">
         <div class="month-name">${pm.label}</div>
@@ -1849,6 +1866,7 @@ function renderProgramTracker(rows) {
         <div class="month-pct-label">${hasData ? pct + '% of 2,200' : 'no data'}</div>
         <div class="month-bar-wrap"><div class="month-bar-fill" style="width:${Math.min(100,pct)}%;background:${barColor}"></div></div>
         <div class="month-status" style="color:${statusColor}">${statusText}</div>
+        ${appSubLabel}
       </div>`;
   }).join('');
 }
@@ -2738,6 +2756,9 @@ async function loadOfficialResults() {
     console.warn('Could not load official results from Sheet:', err);
   } finally {
     if (document.getElementById('tab-monthly')?.classList.contains('active')) renderMonthlyReport();
+    // Official kWh is the new primary figure for the 6-Month Program tracker
+    // on the Dashboard tab, so re-render it once official data arrives.
+    if (window._allRows) renderProgramTracker(window._allRows);
   }
 }
 
