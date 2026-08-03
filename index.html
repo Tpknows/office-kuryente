@@ -6,7 +6,7 @@
 <title>EasyPC Energy Monitor</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<script src="https://alcdn.msauth.net/browser/3.18.0/js/msal-browser.min.js"></script>
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -1488,6 +1488,14 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
 // ══════════════════════════════════════════════════════════════
 const MSAL_CLIENT_ID = "63c06b0f-5ca1-4a92-8b1c-74ebbae67b26";
 const MSAL_TENANT_ID = "973ec11f-980d-4bd7-9443-fe528f0a752b";
+
+if (typeof msal === 'undefined') {
+  document.getElementById('auth-status-text').textContent = 'Sign-in library failed to load';
+  const err = document.getElementById('auth-error-text');
+  err.textContent = 'Could not reach the Microsoft sign-in script. Check your internet connection and refresh.';
+  err.style.display = 'block';
+  throw new Error('msal-browser failed to load from CDN');
+}
 
 const msalConfig = {
   auth: {
