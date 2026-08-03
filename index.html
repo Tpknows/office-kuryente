@@ -762,7 +762,7 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
   <!-- HEADER -->
   <header>
     <div class="header-left">
-      <div class="logo-mark">
+      <div class="logo-mark" onclick="unlockAdmin()" style="cursor:pointer;">
         <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
           <path d="M9 1L2 9h6l-1 6 7-8H8l1-6z"/>
         </svg>
@@ -1517,13 +1517,8 @@ tbody td { padding: 10px; font-family: var(--mono); font-size: 0.75rem; color: v
 const MSAL_CLIENT_ID = "63c06b0f-5ca1-4a92-8b1c-74ebbae67b26";
 const MSAL_TENANT_ID = "973ec11f-980d-4bd7-9443-fe528f0a752b";
 
-// Domain allowed to see the Admin tab (Access Log). Since sign-in is already
-// restricted to the EasyPC tenant (MSAL_TENANT_ID above), this just means
-// "anyone who can sign in at all" — there's no separate staff-vs-admin split.
-// NOTE: this is a UI convenience, not a hard security boundary — anyone
-// signed in could inspect the page's JS and call the same Apps Script
-// endpoint directly. Fine for an internal low-stakes tool.
-const ADMIN_EMAIL_DOMAIN = "easypc.com.ph";
+// Admin tab visibility: no longer domain-based. It's unlocked by a secret
+// gesture (click the logo 5 times) — see unlockAdmin() near switchTab().
 
 if (typeof msal === 'undefined') {
   document.getElementById('auth-status-text').textContent = 'Sign-in library failed to load';
@@ -1587,9 +1582,9 @@ function onSignedIn(account) {
   document.getElementById('app-content').style.display = '';
   const label = document.getElementById('auth-user-label');
   if (label) label.textContent = account.username;
-  if ((account.username || '').toLowerCase().endsWith('@' + ADMIN_EMAIL_DOMAIN)) {
-    document.getElementById('admin-tab-btn').style.display = '';
-  }
+  // Admin tab is no longer auto-revealed by domain — it stays hidden until
+  // the secret gesture (5 clicks on the logo) unlocks it. See unlockAdmin()
+  // further down.
   // Only load dashboard data once identity is confirmed
   loadFromSheet();
   loadOfficialResults();
@@ -2134,6 +2129,21 @@ function render() {
   renderCharts(rows);
   renderWeeklyReport();
   renderMonthlyReport();
+}
+
+// Secret gesture: click the logo 5 times within 3 seconds to reveal the
+// Admin tab. Nothing shown or logged if you get it wrong — it just silently
+// resets the counter, no hint that anything happened.
+let _logoClickCount = 0;
+let _logoClickTimer = null;
+function unlockAdmin() {
+  _logoClickCount++;
+  clearTimeout(_logoClickTimer);
+  _logoClickTimer = setTimeout(() => { _logoClickCount = 0; }, 3000);
+  if (_logoClickCount >= 5) {
+    _logoClickCount = 0;
+    document.getElementById('admin-tab-btn').style.display = '';
+  }
 }
 
 function switchTab(id, btn) {
