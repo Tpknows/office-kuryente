@@ -2715,10 +2715,12 @@ const MO_MONTH_NAMES_ = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY
 // the app uses. Cycles always run 21st→20th, so only the start month name
 // is needed — the year is inferred as the most recent one that isn't in
 // the future, since official bills are always for a closed/past cycle.
+// Month names are matched on their first 3 letters, so short forms typed
+// in the sheet ("AUG 21 TO...", "SEPT 21 TO...") work the same as full names.
 function officialPeriodToKey_(periodText, refDate = new Date()) {
-  const m = String(periodText || '').toUpperCase().match(/([A-Z]+)\s+21\s+TO/);
+  const m = String(periodText || '').toUpperCase().match(/([A-Z]{3,})\.?\s+21\s+TO/);
   if (!m) return null;
-  const monthIdx = MO_MONTH_NAMES_.indexOf(m[1]);
+  const monthIdx = MO_MONTH_NAMES_.findIndex(n => n.startsWith(m[1].slice(0, 3)));
   if (monthIdx === -1) return null;
   let year = refDate.getFullYear();
   if (new Date(year, monthIdx, 21) > refDate) year -= 1;
